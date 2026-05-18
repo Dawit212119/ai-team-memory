@@ -1,0 +1,38 @@
+{
+  "name": "ai-team-memory",
+  "version": "0.1.0",
+  "description": "AI Team Memory — automatic institutional memory from engineering activity",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "dev:once": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "engineering",
+    "memory",
+    "ai",
+    "knowledge-graph"
+  ],
+  "author": "dawit",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "openai": "^6.35.0",
+    "pg": "^8.20.0",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.0",
+    "@types/pg": "^8.20.0",
+    "@types/swagger-ui-express": "^4.1.8",
+    "tsx": "^4.22.2",
+    "typescript": "^6.0.3"
+  }
+}
