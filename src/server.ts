@@ -24,6 +24,7 @@ import {
 import { getLinkedPrsForIssue } from "./repository";
 import { authMiddleware, requireScope, registerApiKey, getKeys, revokeKey, type AuthenticatedRequest } from "./auth";
 import { handleGitHubWebhook, webhookStatus } from "./webhooks";
+import { initSlack, slackStatus } from "./slack";
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
@@ -80,6 +81,7 @@ app.get("/", async (_req, res) => {
       explain: "GET /explain/service/{name}",
       entities: "GET /entities",
       webhooks: "POST /webhooks/github",
+      slack: "GET /slack/status",
       api_keys: "POST /api-keys",
       evaluate: "POST /evaluate",
     },
@@ -96,6 +98,9 @@ app.get("/health", async (_req, res) => {
 // Webhook endpoint (no API key auth — uses signature verification)
 app.post("/webhooks/github", handleGitHubWebhook);
 app.get("/webhooks/status", (_req, res) => res.json(webhookStatus()));
+
+// Slack status
+app.get("/slack/status", (_req, res) => res.json(slackStatus()));
 
 // Auth middleware for all API routes below
 app.use(authMiddleware);
@@ -269,6 +274,7 @@ app.post("/evaluate", requireScope("read"), async (req, res) => {
 async function main() {
   await initDb();
   await initDefaultEntities();
+  initSlack(app);
   const hasVec = await hasPgvector();
   const port = Number(process.env.PORT) || 3000;
   console.log(`pgvector: ${hasVec ? "enabled" : "not available (using JSONB fallback)"}`);
