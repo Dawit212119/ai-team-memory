@@ -1,4 +1,4 @@
-import { pool } from "./db";
+import { pool, hasPgvector } from "./db";
 import type {
   RawPrInput,
   MemoryObjectInput,
@@ -118,6 +118,36 @@ export async function upsertMemoryObject(memory: MemoryObjectInput): Promise<voi
       searchText,
     ]
   );
+
+  // Also store as pgvector column if available
+  const hasVec = await hasPgvector();
+  if (hasVec) {
+    const vecStr = `[${memory.embedding.join(",")}]`;
+    await pool.query(
+      "UPDATE memory_objects SET embedding_vec = $1::vector WHERE id = $2",
+      [vecStr, memory.id]
+    );
+  }
+}
+
+export async function vectorSearch(
+  queryEmbedding: number[],
+  limit = 20
+): Promise<(MemoryObjectRow & { vector_score: number })[]> {
+  const vecStr = `[${queryEmbedding.join(",")}]`;
+  const result = await pool.query(
+    `
+    SELECT id, repo, pr_number, pr_title, problem, root_cause, fix, reasoning,
+           risk_area, services_affected, summary, files_changed, author, created_at,
+           1 - (embedding_vec <=> $1::vector) AS vector_score
+    FROM memory_objects
+    WHERE embedding_vec IS NOT NULL
+    ORDER BY embedding_vec <=> $1::vector
+    LIMIT $2;
+    `,
+    [vecStr, limit]
+  );
+  return result.rows;
 }
 
 export async function getMemoryObjectById(id: string): Promise<MemoryObjectRow | null> {
@@ -352,4 +382,58 @@ export async function getAllEntities(): Promise<EntityAlias[]> {
     `
   );
   return result.rows;
+}
+
+// --- API Keys ---
+
+export async function createApiKey(keyHash: string, keyPrefix: string, tenantId: string, name: string): Promise<number> {
+  const result = await pool.query(
+    `INSERT INTO api_keys (key_hash, key_prefix, tenant_id, name) VALUES ($1,$2,$3,$4) RETURNING id`,
+    [keyHash, keyPrefix, tenantId, name]
+  );
+  return result.rows[0].id;
+}
+
+export async function getApiKeyByHash(keyHash: string): Promise<{
+  id: number; tenant_id: string; scopes: string[]; revoked_at: string | null;
+} | null> {
+  const result = await pool.query(
+    `SELECT id, tenant_id, scopes, revoked_at FROM api_keys WHERE key_hash = $1`,
+    [keyHash]
+  );
+  if (result.rows.length === 0) return null;
+  await pool.query("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1", [result.rows[0].id]);
+  return result.rows[0];
+}
+
+export async function listApiKeys(tenantId: string): Promise<{ id: number; key_prefix: string; name: string; created_at: string; last_used_at: string | null }[]> {
+  const result = await pool.query(
+    `SELECT id, key_prefix, name, created_at, last_used_at FROM api_keys WHERE tenant_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC`,
+    [tenantId]
+  );
+  return result.rows;
+}
+
+export async function revokeApiKey(id: number): Promise<void> {
+  await pool.query("UPDATE api_keys SET revoked_at = NOW() WHERE id = $1", [id]);
+}
+
+// --- Webhook Events ---
+
+export async function insertWebhookEvent(
+  eventType: string, deliveryId: string | null, repo: string | null, payload: unknown
+): Promise<number> {
+  const result = await pool.query(
+    `INSERT INTO webhook_events (event_type, delivery_id, repo, payload)
+     VALUES ($1,$2,$3,$4::jsonb) ON CONFLICT (delivery_id) DO NOTHING RETURNING id`,
+    [eventType, deliveryId, repo, JSON.stringify(payload)]
+  );
+  return result.rows[0]?.id || 0;
+}
+
+export async function markWebhookProcessed(id: number, error?: string): Promise<void> {
+  await pool.query(
+    `UPDATE webhook_events SET status = $1, error = $2, processed_at = NOW() WHERE id = $3`,
+    [error ? "failed" : "processed", error || null, id]
+  );
 }

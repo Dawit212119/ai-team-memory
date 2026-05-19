@@ -6,6 +6,7 @@ import {
   getMemoryObjectById as repoGetMemoryById,
   getAllMemoryObjectsForSearch,
   keywordSearch,
+  vectorSearch,
   upsertIssue,
   upsertIssuePrLink,
   getLinkedIssuesForPr as repoGetLinkedIssues,
@@ -18,6 +19,7 @@ import {
   getAllAliasesForEntity,
   getAllEntities as repoGetAllEntities,
 } from "./repository";
+import { hasPgvector } from "./db";
 import type {
   NormalizedMemory,
   SearchResultItem,
@@ -286,9 +288,10 @@ export async function syncRepository(repo: string, limit = 20): Promise<SyncResu
 }
 
 export async function searchMemories(query: string): Promise<SearchResponse> {
-  const [queryEmbedding, allRows, kwRows] = await Promise.all([
+  const hasVec = await hasPgvector();
+
+  const [queryEmbedding, kwRows] = await Promise.all([
     embedText(query),
-    getAllMemoryObjectsForSearch(),
     keywordSearch(query),
   ]);
 
@@ -300,12 +303,39 @@ export async function searchMemories(query: string): Promise<SearchResponse> {
     }
   }
 
-  const scored = allRows.map((row) => {
-    const vectorScore = cosineSimilarity(queryEmbedding, row.embedding);
-    const keywordScore = kwScoreMap.get(row.id) || 0;
-    const finalScore = vectorScore * 0.7 + keywordScore * 0.3;
-    return { vectorScore, keywordScore, finalScore, memory: normalizeMemoryObject(row) };
-  });
+  let scored: { vectorScore: number; keywordScore: number; finalScore: number; memory: NormalizedMemory }[];
+
+  if (hasVec) {
+    // pgvector: fast SQL-based similarity search
+    const vecRows = await vectorSearch(queryEmbedding, 20);
+    scored = vecRows.map((row) => {
+      const vectorScore = row.vector_score;
+      const keywordScore = kwScoreMap.get(row.id) || 0;
+      const finalScore = vectorScore * 0.7 + keywordScore * 0.3;
+      return { vectorScore, keywordScore, finalScore, memory: normalizeMemoryObject(row) };
+    });
+
+    // Merge any keyword-only hits not in vector results
+    for (const kw of kwRows) {
+      if (!scored.some((s) => s.memory.id === kw.id)) {
+        scored.push({
+          vectorScore: 0,
+          keywordScore: kwScoreMap.get(kw.id) || 0,
+          finalScore: (kwScoreMap.get(kw.id) || 0) * 0.3,
+          memory: normalizeMemoryObject(kw),
+        });
+      }
+    }
+  } else {
+    // Fallback: in-memory cosine similarity
+    const allRows = await getAllMemoryObjectsForSearch();
+    scored = allRows.map((row) => {
+      const vectorScore = cosineSimilarity(queryEmbedding, row.embedding);
+      const keywordScore = kwScoreMap.get(row.id) || 0;
+      const finalScore = vectorScore * 0.7 + keywordScore * 0.3;
+      return { vectorScore, keywordScore, finalScore, memory: normalizeMemoryObject(row) };
+    });
+  }
 
   scored.sort((a, b) => b.finalScore - a.finalScore);
 

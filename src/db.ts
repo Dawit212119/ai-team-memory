@@ -5,6 +5,10 @@ export const pool = new Pool({
 });
 
 export async function initDb(): Promise<void> {
+  await pool.query("CREATE EXTENSION IF NOT EXISTS vector;").catch(() => {
+    console.warn("pgvector extension not available — falling back to JSONB embeddings");
+  });
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS raw_prs (
       id BIGSERIAL PRIMARY KEY,
@@ -46,6 +50,17 @@ export async function initDb(): Promise<void> {
   `);
 
   await upgradeDb();
+}
+
+export async function hasPgvector(): Promise<boolean> {
+  try {
+    const result = await pool.query(
+      "SELECT 1 FROM pg_extension WHERE extname = 'vector'"
+    );
+    return result.rows.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 async function upgradeDb(): Promise<void> {
@@ -108,5 +123,57 @@ async function upgradeDb(): Promise<void> {
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_entity_canonical ON entity_aliases (canonical);
+  `);
+
+  // pgvector: add vector column alongside JSONB for fast similarity search
+  const hasVec = await hasPgvector();
+  if (hasVec) {
+    await addCol("memory_objects", "embedding_vec", "vector(1536)");
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_memory_embedding_vec
+      ON memory_objects USING ivfflat (embedding_vec vector_cosine_ops)
+      WITH (lists = 100);
+    `).catch(() => {
+      // ivfflat needs at least some rows; create hnsw as fallback
+      pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_memory_embedding_vec
+        ON memory_objects USING hnsw (embedding_vec vector_cosine_ops);
+      `).catch(() => {});
+    });
+  }
+
+  // API keys for authentication
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id BIGSERIAL PRIMARY KEY,
+      key_hash TEXT NOT NULL UNIQUE,
+      key_prefix TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      scopes JSONB NOT NULL DEFAULT '["read","write"]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_used_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys (tenant_id);
+  `);
+
+  // Webhook events log
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS webhook_events (
+      id BIGSERIAL PRIMARY KEY,
+      source TEXT NOT NULL DEFAULT 'github',
+      event_type TEXT NOT NULL,
+      delivery_id TEXT UNIQUE,
+      repo TEXT,
+      payload JSONB NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      processed_at TIMESTAMPTZ
+    );
   `);
 }
