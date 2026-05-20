@@ -29,6 +29,8 @@ import { computeServiceOwnership, computeBusFactorReport, computeFileOwnership, 
 import { createIncident, updateIncident, getIncidentById, listIncidents, whatBrokeAfterDeploy, getIncidentStats } from "./incidents";
 import { buildServiceGraph, analyzeImpact, getFileCoChanges } from "./dependencies";
 import { logAuditEvent, getAuditLog } from "./audit";
+import { getGitHubAuthUrl, handleGitHubCallback, getSlackAuthUrl, handleSlackCallback, listIntegrations, deleteIntegration } from "./integrations";
+import { ingestSlackMessage, fetchAndIngestSlackHistory, getSlackInsights } from "./slackIngestion";
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
@@ -93,6 +95,11 @@ app.get("/", async (_req, res) => {
       incidents: "POST /incidents",
       incident_stats: "GET /incidents/stats",
       deploy_impact: "GET /deploy-impact?time=&hours=",
+      integrations: "GET /integrations",
+      connect_github: "GET /auth/github",
+      connect_slack: "GET /auth/slack",
+      slack_ingest: "POST /slack/ingest-channel",
+      slack_insights: "GET /slack/insights",
       audit_log: "GET /audit-log",
       webhooks: "POST /webhooks/github",
       slack: "GET /slack/status",
@@ -115,6 +122,49 @@ app.get("/webhooks/status", (_req, res) => res.json(webhookStatus()));
 
 // Slack status
 app.get("/slack/status", (_req, res) => res.json(slackStatus()));
+
+// --- OAuth Callbacks (public, before auth middleware) ---
+app.get("/auth/github", (req, res) => {
+  try {
+    const tenantId = (req.query.tenant as string) || "default";
+    return res.redirect(getGitHubAuthUrl(tenantId));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/auth/github/callback", async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    if (!code || !state) return res.status(400).json({ error: "Missing code or state" });
+    await handleGitHubCallback(code as string, state as string);
+    const dashboardUrl = process.env.DASHBOARD_URL || "http://localhost:3001";
+    return res.redirect(`${dashboardUrl}/settings?connected=github`);
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/auth/slack", (req, res) => {
+  try {
+    const tenantId = (req.query.tenant as string) || "default";
+    return res.redirect(getSlackAuthUrl(tenantId));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/auth/slack/callback", async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    if (!code || !state) return res.status(400).json({ error: "Missing code or state" });
+    await handleSlackCallback(code as string, state as string);
+    const dashboardUrl = process.env.DASHBOARD_URL || "http://localhost:3001";
+    return res.redirect(`${dashboardUrl}/settings?connected=slack`);
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
 
 // Auth middleware for all API routes below
 app.use(authMiddleware);
@@ -431,6 +481,58 @@ app.get("/audit-log", requireScope("admin"), async (req: AuthenticatedRequest, r
       actor: req.query.actor as string,
       limit: req.query.limit ? Number(req.query.limit) : undefined,
       offset: req.query.offset ? Number(req.query.offset) : undefined,
+    }));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+// --- Integrations ---
+app.get("/integrations", requireScope("read"), async (req: AuthenticatedRequest, res) => {
+  try {
+    return res.json(await listIntegrations(req.tenantId || "default"));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.delete("/integrations/:provider", requireScope("admin"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const deleted = await deleteIntegration(req.tenantId || "default", req.params.provider as string);
+    if (!deleted) return res.status(404).json({ error: "integration not found" });
+    await logAuditEvent({ tenantId: req.tenantId || "default", actor: req.keyPrefix || "system", action: "integration.disconnect", resourceType: "integration", resourceId: req.params.provider as string });
+    return res.json({ disconnected: true });
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+// --- Slack Ingestion ---
+app.post("/slack/ingest-channel", requireScope("write"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { channel_id, limit } = req.body || {};
+    if (!channel_id) return res.status(400).json({ error: "channel_id is required" });
+    return res.json(await fetchAndIngestSlackHistory(req.tenantId || "default", channel_id, Number(limit) || 100));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/slack/insights", requireScope("read"), async (req: AuthenticatedRequest, res) => {
+  try {
+    return res.json(await getSlackInsights(req.tenantId || "default"));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/slack/ingest-message", requireScope("write"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { channel_id, message_ts, text, user_name, channel_name, thread_ts } = req.body || {};
+    if (!channel_id || !message_ts || !text)
+      return res.status(400).json({ error: "channel_id, message_ts, and text are required" });
+    return res.json(await ingestSlackMessage(req.tenantId || "default", {
+      channel_id, message_ts, text, user_name, channel_name, thread_ts,
     }));
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
