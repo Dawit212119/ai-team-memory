@@ -31,6 +31,7 @@ export async function revokeKey(id: number) {
 export interface AuthenticatedRequest extends Request {
   tenantId?: string;
   apiKeyScopes?: string[];
+  keyPrefix?: string;
 }
 
 export function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
@@ -38,6 +39,7 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
   if (process.env.AUTH_REQUIRED !== "true") {
     req.tenantId = "default";
     req.apiKeyScopes = ["read", "write", "admin"];
+    req.keyPrefix = "dev";
     next();
     return;
   }
@@ -63,6 +65,7 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
       }
       req.tenantId = apiKey.tenant_id;
       req.apiKeyScopes = apiKey.scopes;
+      req.keyPrefix = apiKey.key_prefix;
       next();
     })
     .catch(() => {

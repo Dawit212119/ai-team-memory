@@ -395,10 +395,10 @@ export async function createApiKey(keyHash: string, keyPrefix: string, tenantId:
 }
 
 export async function getApiKeyByHash(keyHash: string): Promise<{
-  id: number; tenant_id: string; scopes: string[]; revoked_at: string | null;
+  id: number; tenant_id: string; scopes: string[]; revoked_at: string | null; key_prefix: string;
 } | null> {
   const result = await pool.query(
-    `SELECT id, tenant_id, scopes, revoked_at FROM api_keys WHERE key_hash = $1`,
+    `SELECT id, tenant_id, scopes, revoked_at, key_prefix FROM api_keys WHERE key_hash = $1`,
     [keyHash]
   );
   if (result.rows.length === 0) return null;

@@ -161,6 +161,25 @@ async function upgradeDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys (tenant_id);
   `);
 
+  // Audit log
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      actor TEXT NOT NULL,
+      action TEXT NOT NULL,
+      resource_type TEXT,
+      resource_id TEXT,
+      details JSONB DEFAULT '{}'::jsonb,
+      ip_address TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_audit_log_tenant ON audit_log (tenant_id, created_at DESC);
+  `);
+
   // Incidents
   await pool.query(`
     CREATE TABLE IF NOT EXISTS incidents (

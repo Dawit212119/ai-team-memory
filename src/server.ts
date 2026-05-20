@@ -28,6 +28,7 @@ import { initSlack, slackStatus } from "./slack";
 import { computeServiceOwnership, computeBusFactorReport, computeFileOwnership, getTeamOverview } from "./ownership";
 import { createIncident, updateIncident, getIncidentById, listIncidents, whatBrokeAfterDeploy, getIncidentStats } from "./incidents";
 import { buildServiceGraph, analyzeImpact, getFileCoChanges } from "./dependencies";
+import { logAuditEvent, getAuditLog } from "./audit";
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
@@ -92,6 +93,7 @@ app.get("/", async (_req, res) => {
       incidents: "POST /incidents",
       incident_stats: "GET /incidents/stats",
       deploy_impact: "GET /deploy-impact?time=&hours=",
+      audit_log: "GET /audit-log",
       webhooks: "POST /webhooks/github",
       slack: "GET /slack/status",
       api_keys: "POST /api-keys",
@@ -126,6 +128,7 @@ app.post("/api-keys", requireScope("admin"), async (req: AuthenticatedRequest, r
       return res.status(400).json({ error: "name is required" });
     const tenantId = req.tenantId || "default";
     const result = await registerApiKey(tenantId, name);
+    await logAuditEvent({ tenantId, actor: req.keyPrefix || "system", action: "api_key.create", resourceType: "api_key", resourceId: String(result.id), details: { name }, ipAddress: req.ip });
     return res.status(201).json({
       id: result.id,
       key: result.key,
@@ -148,7 +151,9 @@ app.get("/api-keys", requireScope("admin"), async (req: AuthenticatedRequest, re
 
 app.delete("/api-keys/:id", requireScope("admin"), async (req, res) => {
   try {
-    await revokeKey(Number(req.params.id as string));
+    const keyId = Number(req.params.id as string);
+    await revokeKey(keyId);
+    await logAuditEvent({ tenantId: (req as AuthenticatedRequest).tenantId || "default", actor: (req as AuthenticatedRequest).keyPrefix || "system", action: "api_key.revoke", resourceType: "api_key", resourceId: String(keyId) });
     return res.json({ revoked: true });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
@@ -412,6 +417,21 @@ app.get("/issues/:repo/:issueNumber/prs", requireScope("read"), async (req, res)
       issue_number: issueNumber,
       linked_prs: await getLinkedPrsForIssue(repo, issueNumber),
     });
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+// --- Audit Log ---
+app.get("/audit-log", requireScope("admin"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const tenantId = req.tenantId || "default";
+    return res.json(await getAuditLog(tenantId, {
+      action: req.query.action as string,
+      actor: req.query.actor as string,
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
+      offset: req.query.offset ? Number(req.query.offset) : undefined,
+    }));
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
   }
