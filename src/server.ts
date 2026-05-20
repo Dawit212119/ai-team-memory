@@ -27,6 +27,7 @@ import { handleGitHubWebhook, webhookStatus } from "./webhooks";
 import { initSlack, slackStatus } from "./slack";
 import { computeServiceOwnership, computeBusFactorReport, computeFileOwnership, getTeamOverview } from "./ownership";
 import { createIncident, updateIncident, getIncidentById, listIncidents, whatBrokeAfterDeploy, getIncidentStats } from "./incidents";
+import { buildServiceGraph, analyzeImpact, getFileCoChanges } from "./dependencies";
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
@@ -86,6 +87,8 @@ app.get("/", async (_req, res) => {
       bus_factor: "GET /bus-factor/service/{name}",
       team: "GET /team/overview",
       file_owners: "GET /ownership/file/{repo}/{path}",
+      dependency_graph: "GET /dependencies/graph",
+      impact_analysis: "GET /dependencies/impact/{service}",
       incidents: "POST /incidents",
       incident_stats: "GET /incidents/stats",
       deploy_impact: "GET /deploy-impact?time=&hours=",
@@ -283,6 +286,31 @@ app.get("/ownership/file/:repo/*path", requireScope("read"), async (req, res) =>
     const repo = req.params.repo as string;
     const filePath = req.params.path as string;
     return res.json(await computeFileOwnership(repo, filePath));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+// --- Dependency Intelligence ---
+app.get("/dependencies/graph", requireScope("read"), async (_req, res) => {
+  try {
+    return res.json(await buildServiceGraph());
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/dependencies/impact/:service", requireScope("read"), async (req, res) => {
+  try {
+    return res.json(await analyzeImpact(req.params.service as string));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/dependencies/file-cochanges/:repo/*path", requireScope("read"), async (req, res) => {
+  try {
+    return res.json(await getFileCoChanges(req.params.repo as string, req.params.path as string));
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
   }
