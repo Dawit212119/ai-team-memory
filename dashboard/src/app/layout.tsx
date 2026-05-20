@@ -33,6 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <NavLink href="/services">Services</NavLink>
                 <NavLink href="/ownership">Ownership</NavLink>
                 <NavLink href="/onboarding">Onboarding</NavLink>
+                <NavLink href="/settings">Settings</NavLink>
               </div>
             </div>
           </div>

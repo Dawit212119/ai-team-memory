@@ -1,7 +1,7 @@
 {
   "name": "ai-team-memory",
   "version": "0.1.0",
-  "description": "AI Team Memory — automatic institutional memory from engineering activity",
+  "description": "AI Team Memory \u2014 automatic institutional memory from engineering activity",
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
@@ -24,6 +24,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
+    "node-fetch": "^3.3.2",
     "openai": "^6.35.0",
     "pg": "^8.20.0",
     "pgvector": "^0.2.1",

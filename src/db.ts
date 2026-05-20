@@ -161,6 +161,50 @@ async function upgradeDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys (tenant_id);
   `);
 
+  // Integrations (OAuth credentials per tenant)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS integrations (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      provider_team_id TEXT,
+      provider_team_name TEXT,
+      access_token TEXT NOT NULL,
+      refresh_token TEXT,
+      token_expires_at TIMESTAMPTZ,
+      scopes TEXT,
+      extra JSONB DEFAULT '{}'::jsonb,
+      connected_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(tenant_id, provider, provider_team_id)
+    );
+  `);
+
+  // Slack ingested messages
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS slack_messages (
+      id BIGSERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      channel_name TEXT,
+      message_ts TEXT NOT NULL,
+      thread_ts TEXT,
+      user_id TEXT,
+      user_name TEXT,
+      text TEXT NOT NULL,
+      is_decision BOOLEAN DEFAULT FALSE,
+      topics JSONB DEFAULT '[]'::jsonb,
+      services_mentioned JSONB DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(tenant_id, channel_id, message_ts)
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_slack_messages_tenant ON slack_messages (tenant_id, created_at DESC);
+  `);
+
   // Audit log
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_log (
