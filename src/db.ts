@@ -161,6 +161,31 @@ async function upgradeDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys (tenant_id);
   `);
 
+  // Incidents
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS incidents (
+      id BIGSERIAL PRIMARY KEY,
+      external_id TEXT UNIQUE,
+      repo TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      severity TEXT NOT NULL DEFAULT 'unknown',
+      status TEXT NOT NULL DEFAULT 'open',
+      source TEXT NOT NULL DEFAULT 'manual',
+      triggered_at TIMESTAMPTZ NOT NULL,
+      resolved_at TIMESTAMPTZ,
+      services_affected JSONB DEFAULT '[]'::jsonb,
+      related_prs JSONB DEFAULT '[]'::jsonb,
+      postmortem TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_incidents_triggered ON incidents (triggered_at DESC);
+  `);
+
   // Webhook events log
   await pool.query(`
     CREATE TABLE IF NOT EXISTS webhook_events (

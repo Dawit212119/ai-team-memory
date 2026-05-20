@@ -26,6 +26,7 @@ import { authMiddleware, requireScope, registerApiKey, getKeys, revokeKey, type 
 import { handleGitHubWebhook, webhookStatus } from "./webhooks";
 import { initSlack, slackStatus } from "./slack";
 import { computeServiceOwnership, computeBusFactorReport, computeFileOwnership, getTeamOverview } from "./ownership";
+import { createIncident, updateIncident, getIncidentById, listIncidents, whatBrokeAfterDeploy, getIncidentStats } from "./incidents";
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
@@ -85,6 +86,9 @@ app.get("/", async (_req, res) => {
       bus_factor: "GET /bus-factor/service/{name}",
       team: "GET /team/overview",
       file_owners: "GET /ownership/file/{repo}/{path}",
+      incidents: "POST /incidents",
+      incident_stats: "GET /incidents/stats",
+      deploy_impact: "GET /deploy-impact?time=&hours=",
       webhooks: "POST /webhooks/github",
       slack: "GET /slack/status",
       api_keys: "POST /api-keys",
@@ -279,6 +283,92 @@ app.get("/ownership/file/:repo/*path", requireScope("read"), async (req, res) =>
     const repo = req.params.repo as string;
     const filePath = req.params.path as string;
     return res.json(await computeFileOwnership(repo, filePath));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+// --- Incident Memory ---
+app.post("/incidents", requireScope("write"), async (req, res) => {
+  try {
+    const { title, severity, triggered_at } = req.body || {};
+    if (!title || !triggered_at)
+      return res.status(400).json({ error: "title and triggered_at are required" });
+    const incident = await createIncident({
+      externalId: req.body.external_id,
+      repo: req.body.repo,
+      title,
+      description: req.body.description,
+      severity: severity || "unknown",
+      status: req.body.status,
+      source: req.body.source,
+      triggeredAt: triggered_at,
+      resolvedAt: req.body.resolved_at,
+      servicesAffected: req.body.services_affected,
+    });
+    return res.status(201).json(incident);
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/incidents", requireScope("read"), async (req, res) => {
+  try {
+    const incidents = await listIncidents({
+      status: req.query.status as string,
+      severity: req.query.severity as string,
+      service: req.query.service as string,
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
+    });
+    return res.json(incidents);
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/incidents/stats", requireScope("read"), async (_req, res) => {
+  try {
+    return res.json(await getIncidentStats());
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/incidents/:id", requireScope("read"), async (req, res) => {
+  try {
+    const incident = await getIncidentById(Number(req.params.id as string));
+    if (!incident) return res.status(404).json({ error: "incident not found" });
+    return res.json(incident);
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.patch("/incidents/:id", requireScope("write"), async (req, res) => {
+  try {
+    const incident = await updateIncident(Number(req.params.id as string), {
+      title: req.body.title,
+      description: req.body.description,
+      severity: req.body.severity,
+      status: req.body.status,
+      resolvedAt: req.body.resolved_at,
+      servicesAffected: req.body.services_affected,
+      postmortem: req.body.postmortem,
+      relatedPrs: req.body.related_prs,
+    });
+    if (!incident) return res.status(404).json({ error: "incident not found" });
+    return res.json(incident);
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/deploy-impact", requireScope("read"), async (req, res) => {
+  try {
+    const time = req.query.time as string;
+    if (!time) return res.status(400).json({ error: "time query parameter is required (ISO 8601)" });
+    const hours = req.query.hours ? Number(req.query.hours) : 24;
+    return res.json(await whatBrokeAfterDeploy(time, hours));
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
   }
