@@ -25,6 +25,7 @@ import { getLinkedPrsForIssue } from "./repository";
 import { authMiddleware, requireScope, registerApiKey, getKeys, revokeKey, type AuthenticatedRequest } from "./auth";
 import { handleGitHubWebhook, webhookStatus } from "./webhooks";
 import { initSlack, slackStatus } from "./slack";
+import { computeServiceOwnership, computeBusFactorReport, computeFileOwnership, getTeamOverview } from "./ownership";
 
 const app = express();
 app.use(express.json({ limit: "5mb" }));
@@ -80,6 +81,10 @@ app.get("/", async (_req, res) => {
       timeline: "GET /timeline/service/{name}",
       explain: "GET /explain/service/{name}",
       entities: "GET /entities",
+      ownership: "GET /ownership/service/{name}",
+      bus_factor: "GET /bus-factor/service/{name}",
+      team: "GET /team/overview",
+      file_owners: "GET /ownership/file/{repo}/{path}",
       webhooks: "POST /webhooks/github",
       slack: "GET /slack/status",
       api_keys: "POST /api-keys",
@@ -239,6 +244,41 @@ app.post("/entities", requireScope("write"), async (req, res) => {
       return res.status(400).json({ error: "canonical and alias are required" });
     await upsertEntityAlias(canonical, alias.toLowerCase(), entity_type || "service");
     return res.json({ canonical, alias: alias.toLowerCase(), entity_type: entity_type || "service" });
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+// --- Ownership Intelligence ---
+app.get("/ownership/service/:name", requireScope("read"), async (req, res) => {
+  try {
+    return res.json(await computeServiceOwnership(req.params.name as string));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/bus-factor/service/:name", requireScope("read"), async (req, res) => {
+  try {
+    return res.json(await computeBusFactorReport(req.params.name as string));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/team/overview", requireScope("read"), async (_req, res) => {
+  try {
+    return res.json(await getTeamOverview());
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/ownership/file/:repo/*path", requireScope("read"), async (req, res) => {
+  try {
+    const repo = req.params.repo as string;
+    const filePath = req.params.path as string;
+    return res.json(await computeFileOwnership(repo, filePath));
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
   }
